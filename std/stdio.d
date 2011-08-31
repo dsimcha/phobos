@@ -22,6 +22,8 @@ import core.stdc.errno, core.stdc.stddef, core.stdc.stdlib, core.memory,
 import std.algorithm, std.array, std.conv, std.exception, std.file, std.format,
     std.range, std.string, std.traits, std.typecons,
     std.typetuple, std.utf;
+    
+import std.parallelism : TaskPool;
 
 version (DigitalMars) version (Windows)
 {
@@ -909,7 +911,7 @@ Returns the file number corresponding to this object.
 Range that reads one line at a time. */
     enum KeepTerminator : bool { no, yes }
     /// ditto
-    struct ByLine(Char, Terminator)
+    static struct ByLine(Char, Terminator)
     {
         File file;
         Char[] line;
@@ -1018,7 +1020,7 @@ to this file. */
     /**
      * Range that reads a chunk at a time.
      */
-    struct ByChunk
+    static struct ByChunk
     {
       private:
         File    file_;
@@ -1115,11 +1117,79 @@ In case of an I/O error, an $(D StdioException) is thrown.
 
         assert(i == witness.length);
     }
+    /+
+    private static struct AsyncRecycleImpl(ReadFunType)
+    {
+        // This needs to be here because it needs to live on the heap so that
+        // it's safe to take the address of a member function.
+        File file_;
+        
+        TaskPool pool_;
+        
+        // This needs to be up here because of DMD forward ref issues.
+        bool fileIsClosed()
+        {
+            return !file_.isOpen();
+        }
+        
+        typeof(pool_.asyncBuf(ReadFunType.init, &fileIsClosed)) abuf_;
+        
+        ~this()
+        {
+            if(pool_ !is null) pool_.stop();
+        }                
+    }
+    
+
+    static struct ByChunkAsync
+    {
+    private:
+        // Caching the front of the range here is necessary to avoid giving
+        // ByChunkAsync subtly different semantics than ByChunk when multiple
+        // copies of the same instance exist.
+        ubyte[] front_;         
+        alias typeof(&File.init.rawRead!ubyte) ReadFunType;
+        alias AsyncRecycleImpl!ReadFunType Impl;
+        
+        RefCounted!(Impl, RefCountedAutoInitialize.no) impl_;
+        /+     
+    public @trusted:
+        
+        this(File file, size_t size, size_t nPrefetch)
+        {
+            impl_ = typeof(impl_)(&impl_.file_.rawRead!ubyte, size, nPrefetch);
+            if(!empty) front_ = impl_.refCountedPayload().abuf_.front;
+        }
+        
+        @property ubyte[] front() 
+        {
+            return front_;
+        }
+        
+        void popFront()
+        {
+            auto abuf = &(impl_.refCountedPayload().abuf_);
+            abuf.popFront();
+            if(abuf.empty) 
+            {
+                front_ = null;
+            } 
+            else
+            {
+                front_ = abuf.front;
+            }
+        }
+        
+        @property bool empty()
+        {
+            return impl_.refCountedPayload().abuf_.empty;
+        }+/
+    }    +/     
 
 /**
 $(D Range) that locks the file and allows fast writing to it.
  */
-    struct LockingTextWriter
+    static struct LockingTextWriter
     {
         FILE* fps;          // the shared file handle
         _iobuf* handle;     // the unshared version of fps
